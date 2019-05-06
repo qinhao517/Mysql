@@ -258,3 +258,192 @@ possible_keys: PRIMARY
         Extra: Using where
 1 row in set, 1 warning (0.00 sec)
 ```
+##### index: 表示全索引扫描(full index scan), 和 ALL 类型类似, 只不过 ALL 类型是全表扫描, 而 index 类型则仅仅扫描所有的索引, 而不扫描数据.
+index 类型通常出现在: 所要查询的数据直接在索引树中就可以获取到, 而不需要扫描数据. 当是这种情况时, Extra 字段 会显示 Using index.
+
+例如:
+```
+mysql> EXPLAIN SELECT name FROM  user_info \G
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: user_info
+   partitions: NULL
+         type: index
+possible_keys: NULL
+          key: name_index
+      key_len: 152
+          ref: NULL
+         rows: 10
+     filtered: 100.00
+        Extra: Using index
+1 row in set, 1 warning (0.00 sec)
+```
+##### 上面的例子中, 我们查询的 name 字段恰好是一个索引, 因此我们直接从索引中获取数据就可以满足查询的需求了, 而不需要查询表中的数据. 因此这样的情况下, type 的值是 index, 并且 Extra 的值是 Using index.
+
+ALL: 表示全表扫描, 这个类型的查询是性能最差的查询之一. 通常来说, 我们的查询不应该出现 ALL 类型的查询, 因为这样的查询在数据量大的情况下, 对数据库的性能是巨大的灾难. 如一个查询是 ALL 类型查询, 那么一般来说可以对相应的字段添加索引来避免.
+下面是一个全表扫描的例子, 可以看到, 在全表扫描时, possible_keys 和 key 字段都是 NULL, 表示没有使用到索引, 并且 rows 十分巨大, 因此整个查询效率是十分低下的.
+```
+mysql> EXPLAIN SELECT age FROM  user_info WHERE age = 20 \G
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: user_info
+   partitions: NULL
+         type: ALL
+possible_keys: NULL
+          key: NULL
+      key_len: NULL
+          ref: NULL
+         rows: 10
+     filtered: 10.00
+        Extra: Using where
+1 row in set, 1 warning (0.00 sec)
+```
+##### type 类型的性能比较
+通常来说, 不同的 type 类型的性能关系如下:
+ALL < index < range ~ index_merge < ref < eq_ref < const < system
+ALL 类型因为是全表扫描, 因此在相同的查询条件下, 它是速度最慢的.
+而 index 类型的查询虽然不是全表扫描, 但是它扫描了所有的索引, 因此比 ALL 类型的稍快.
+后面的几种类型都是利用了索引来查询数据, 因此可以过滤部分或大部分数据, 因此查询效率就比较高了.
+
+#### possible_keys
+possible_keys 表示 MySQL 在查询时, 能够使用到的索引. 注意, 即使有些索引在 possible_keys 中出现, 但是并不表示此索引会真正地被 MySQL 使用到. MySQL 在查询时具体使用了哪些索引, 由 key 字段决定.
+
+#### key
+此字段是 MySQL 在当前查询时所真正使用到的索引.
+
+#### key_len
+表示查询优化器使用了索引的字节数. 这个字段可以评估组合索引是否完全被使用, 或只有最左部分字段被使用到.
+key_len 的计算规则如下:
+
+字符串
+
+char(n): n 字节长度
+
+varchar(n): 如果是 utf8 编码, 则是 3 n + 2字节; 如果是 utf8mb4 编码, 则是 4 n + 2 字节.
+
+数值类型:
+
+TINYINT: 1字节
+
+SMALLINT: 2字节
+
+MEDIUMINT: 3字节
+
+INT: 4字节
+
+BIGINT: 8字节
+
+时间类型
+
+DATE: 3字节
+
+TIMESTAMP: 4字节
+
+DATETIME: 8字节
+
+字段属性: NULL 属性 占用一个字节. 如果一个字段是 NOT NULL 的, 则没有此属性.
+
+我们来举两个简单的栗子:
+```
+mysql> EXPLAIN SELECT * FROM order_info WHERE user_id < 3 AND product_name = 'p1' AND productor = 'WHH' \G
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: order_info
+   partitions: NULL
+         type: range
+possible_keys: user_product_detail_index
+          key: user_product_detail_index
+      key_len: 9
+          ref: NULL
+         rows: 5
+     filtered: 11.11
+        Extra: Using where; Using index
+1 row in set, 1 warning (0.00 sec)
+```
+###### 上面的例子是从表 order_info 中查询指定的内容, 而我们从此表的建表语句中可以知道, 表 order_info 有一个联合索引:
+```
+KEY `user_product_detail_index` (`user_id`, `product_name`, `productor`)
+```
+##### 不过此查询语句 WHERE user_id < 3 AND product_name = 'p1' AND productor = 'WHH' 中, 因为先进行 user_id 的范围查询, 而根据 最左前缀匹配 原则, 当遇到范围查询时, 就停止索引的匹配, 因此实际上我们使用到的索引的字段只有 user_id, 因此在 EXPLAIN 中, 显示的 key_len 为 9. 因为 user_id 字段是 BIGINT, 占用 8 字节, 而 NULL 属性占用一个字节, 因此总共是 9 个字节. 若我们将user_id 字段改为 BIGINT(20) NOT NULL DEFAULT '0', 则 key_length 应该是8.
+
+上面因为 最左前缀匹配 原则, 我们的查询仅仅使用到了联合索引的 user_id 字段, 因此效率不算高.
+
+接下来我们来看一下下一个例子:
+```
+mysql> EXPLAIN SELECT * FROM order_info WHERE user_id = 1 AND product_name = 'p1' \G;
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: order_info
+   partitions: NULL
+         type: ref
+possible_keys: user_product_detail_index
+          key: user_product_detail_index
+      key_len: 161
+          ref: const,const
+         rows: 2
+     filtered: 100.00
+        Extra: Using index
+1 row in set, 1 warning (0.00 sec)
+```
+这次的查询中, 我们没有使用到范围查询, key_len 的值为 161. 为什么呢? 因为我们的查询条件 WHERE user_id = 1 AND product_name = 'p1' 中, 仅仅使用到了联合索引中的前两个字段, 因此 keyLen(user_id) + keyLen(product_name) = 9 + 50 * 3 + 2 = 161
+
+#### rows
+rows 也是一个重要的字段. MySQL 查询优化器根据统计信息, 估算 SQL 要查找到结果集需要扫描读取的数据行数.
+这个值非常直观显示 SQL 的效率好坏, 原则上 rows 越少越好.
+
+#### Extra
+EXplain 中的很多额外的信息会在 Extra 字段显示, 常见的有以下几种内容:
+
+Using filesort
+当 Extra 中有 Using filesort 时, 表示 MySQL 需额外的排序操作, 不能通过索引顺序达到排序效果. 一般有 Using filesort, 都建议优化去掉, 因为这样的查询 CPU 资源消耗大.
+
+例如下面的例子:
+```
+mysql> EXPLAIN SELECT * FROM order_info ORDER BY product_name \G
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: order_info
+   partitions: NULL
+         type: index
+possible_keys: NULL
+          key: user_product_detail_index
+      key_len: 253
+          ref: NULL
+         rows: 9
+     filtered: 100.00
+        Extra: Using index; Using filesort
+1 row in set, 1 warning (0.00 sec)
+```
+##### 我们的索引是
+```
+KEY `user_product_detail_index` (`user_id`, `product_name`, `productor`)
+```
+##### 但是上面的查询中根据 product_name 来排序, 因此不能使用索引进行优化, 进而会产生 Using filesort.
+如果我们将排序依据改为 ORDER BY user_id, product_name, 那么就不会出现 Using filesort 了. 例如:
+```
+mysql> EXPLAIN SELECT * FROM order_info ORDER BY user_id, product_name \G
+*************************** 1. row ***************************
+           id: 1
+  select_type: SIMPLE
+        table: order_info
+   partitions: NULL
+         type: index
+possible_keys: NULL
+          key: user_product_detail_index
+      key_len: 253
+          ref: NULL
+         rows: 9
+     filtered: 100.00
+        Extra: Using index
+1 row in set, 1 warning (0.00 sec)
+```
+##### Using index
+"覆盖索引扫描", 表示查询在索引树中就可查找所需数据, 不用扫描表数据文件, 往往说明性能不错
+
+Using temporary
+查询有使用临时表, 一般出现于排序, 分组和多表 join 的情况, 查询效率不高, 建议优化.
