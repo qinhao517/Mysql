@@ -94,7 +94,7 @@ extra: 额外的信息
 
 接下来我们来重点看一下比较重要的几个字段.
 
-### select_type
+#### select_type
 
 select_type 表示了查询的类型, 它的常用取值有:
 
